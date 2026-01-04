@@ -1,0 +1,7 @@
+{
+  "pk": {"S": "FEEDBACK"},
+  "createdAt": {"S": "2025-12-31T14:30:00Z"},
+  "descricao": {"S": "Gostei da explicacao de cloud"},
+  "nota": {"S": "8"},
+  "urgency": {"S": "media"}
+}

@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "feedback-report"
+resolve_s3 = true
+s3_prefix = "feedback-report"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=\"prod\" DynamoEndpoint=\"\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"

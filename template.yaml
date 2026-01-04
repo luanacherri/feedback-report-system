@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Feedback Report System with Lambda, Step Functions, and EventBridge
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: java21
+    MemorySize: 512
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Environment name (dev, prod, etc.)
+  DynamoEndpoint:
+    Type: String
+    Default: ""
+    Description: DynamoDB endpoint (leave empty for AWS DynamoDB)
+
+Resources:
+  # DynamoDB Table for Feedbacks
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-feedbacks'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: createdAt
+          KeyType: RANGE
+
+  # Lambda Function to List Feedbacks
+  ListFeedbacksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-list-feedbacks'
+      CodeUri: .
+      Handler: com.example.lambda.ListFeedbacksHandler::handleRequest
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref FeedbackTable
+          DEFAULT_PAGE_SIZE: 100
+          DYNAMODB_ENDPOINT: !Ref DynamoEndpoint
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref FeedbackTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /feedbacks
+            Method: get
+
+  # Step Functions State Machine for Processing Feedbacks
+  FeedbackProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${Environment}-feedback-processing'
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Feedback processing workflow",
+          "StartAt": "ProcessFeedback",
+          "States": {
+            "ProcessFeedback": {
+              "Type": "Task",
+              "Resource": "${ListFeedbacksFunction.Arn}",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ErrorHandler"
+                }
+              ]
+            },
+            "ErrorHandler": {
+              "Type": "Fail",
+              "Cause": "Error processing feedback"
+            }
+          }
+        }
+
+  # EventBridge Custom Bus
+  FeedbackEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${Environment}-feedback-events'
+
+  # EventBridge Rule to trigger Step Functions
+  FeedbackProcessingRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${Environment}-feedback-processing-rule'
+      EventBusName: !Ref FeedbackEventBus
+      EventPattern:
+        source: ["feedback.system"]
+        detail-type: ["Feedback Submitted"]
+      State: ENABLED
+      Targets:
+        - Arn: !Ref FeedbackProcessingStateMachine
+          Id: "FeedbackProcessingTarget"
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+  # IAM Role for Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt ListFeedbacksFunction.Arn
+
+  # IAM Role for EventBridge
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeStepFunctionsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref FeedbackProcessingStateMachine
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for feedback listing"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/feedbacks"
+    Export:
+      Name: !Sub "${Environment}-feedback-api-endpoint"
+  
+  FeedbackTableName:
+    Description: "DynamoDB table name for feedbacks"
+    Value: !Ref FeedbackTable
+    Export:
+      Name: !Sub "${Environment}-feedback-table-name"
+  
+  StateMachineArn:
+    Description: "Step Functions state machine ARN"
+    Value: !Ref FeedbackProcessingStateMachine
+    Export:
+      Name: !Sub "${Environment}-feedback-state-machine-arn"
+  
+  EventBusName:
+    Description: "EventBridge custom event bus name"
+    Value: !Ref FeedbackEventBus
+    Export:
+      Name: !Sub "${Environment}-feedback-event-bus"

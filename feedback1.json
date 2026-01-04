@@ -1,0 +1,7 @@
+{
+  "pk": {"S": "FEEDBACK"},
+  "createdAt": {"S": "2025-12-30T10:00:00Z"},
+  "descricao": {"S": "Aula sobre serverless foi otima"},
+  "nota": {"S": "9"},
+  "urgency": {"S": "alta"}
+}
