@@ -1,0 +1,27 @@
+=== RELATÓRIO SEMANAL DE FEEDBACKS ===
+Data de geração: 2026-01-04
+
+Total de feedbacks: 3
+
+Média geral das notas: 7.67
+
+=== DISTRIBUIÇÃO POR URGÊNCIA ===
+Alta: 1 feedbacks
+Média: 1 feedbacks
+Baixa: 1 feedbacks
+
+=== QUANTIDADE DE AVALIAÇÕES POR DIA ===
+2025-12-30: 1 avaliações
+2025-12-31: 1 avaliações
+2026-01-02: 1 avaliações
+
+=== DETALHES DOS FEEDBACKS ===
+1. Nota: 9 | Urgência: alta | Data: 2025-12-30T10:00:00Z
+   Descrição: Aula sobre serverless foi otima
+
+2. Nota: 8 | Urgência: media | Data: 2025-12-31T14:30:00Z
+   Descrição: Gostei da explicacao de cloud
+
+3. Nota: 6 | Urgência: baixa | Data: 2026-01-02T09:15:00Z
+   Descrição: Achei a aula rapida demais
+

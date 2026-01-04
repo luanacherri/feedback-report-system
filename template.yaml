@@ -58,6 +58,26 @@ Resources:
             Path: /feedbacks
             Method: get
 
+  # S3 Bucket para armazenar relatórios
+  FeedbackReportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${Environment}-feedback-reports'
+
+  # Lambda Function para gerar relatório semanal
+  GenerateWeeklyReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-generate-weekly-report'
+      CodeUri: .
+      Handler: com.example.lambda.GenerateWeeklyReportHandler::handleRequest
+      Environment:
+        Variables:
+          REPORTS_BUCKET: !Ref FeedbackReportsBucket
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref FeedbackReportsBucket
+
   # Step Functions State Machine for Processing Feedbacks
   FeedbackProcessingStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -67,12 +87,13 @@ Resources:
       DefinitionString: !Sub |
         {
           "Comment": "Feedback processing workflow",
-          "StartAt": "ProcessFeedback",
+          "StartAt": "ListFeedbacks",
           "States": {
-            "ProcessFeedback": {
+            "ListFeedbacks": {
               "Type": "Task",
               "Resource": "${ListFeedbacksFunction.Arn}",
-              "End": true,
+              "Next": "GenerateWeeklyReport",
+              "ResultPath": "$.listResult",
               "Retry": [
                 {
                   "ErrorEquals": ["States.TaskFailed"],
@@ -87,6 +108,14 @@ Resources:
                   "Next": "ErrorHandler"
                 }
               ]
+            },
+            "GenerateWeeklyReport": {
+              "Type": "Task",
+              "Resource": "${GenerateWeeklyReportFunction.Arn}",
+              "Parameters": {
+                "feedbacks.$": "$.listResult.items"
+              },
+              "End": true
             },
             "ErrorHandler": {
               "Type": "Fail",
@@ -135,7 +164,9 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
-                Resource: !GetAtt ListFeedbacksFunction.Arn
+                Resource:
+                  - !GetAtt ListFeedbacksFunction.Arn
+                  - !GetAtt GenerateWeeklyReportFunction.Arn
 
   # IAM Role for EventBridge
   EventBridgeRole:
@@ -170,6 +201,12 @@ Outputs:
     Value: !Ref FeedbackTable
     Export:
       Name: !Sub "${Environment}-feedback-table-name"
+  
+  ReportsBucketName:
+    Description: "S3 bucket name for feedback reports"
+    Value: !Ref FeedbackReportsBucket
+    Export:
+      Name: !Sub "${Environment}-feedback-reports-bucket"
   
   StateMachineArn:
     Description: "Step Functions state machine ARN"

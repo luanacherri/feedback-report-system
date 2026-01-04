@@ -1,0 +1,25 @@
+{
+  "feedbacks": [
+    {
+      "pk": "FEEDBACK",
+      "createdAt": "2025-12-30T10:00:00Z",
+      "descricao": "Aula sobre serverless foi otima",
+      "nota": "9",
+      "urgency": "alta"
+    },
+    {
+      "pk": "FEEDBACK", 
+      "createdAt": "2025-12-31T14:30:00Z",
+      "descricao": "Gostei da explicacao de cloud",
+      "nota": "8",
+      "urgency": "media"
+    },
+    {
+      "pk": "FEEDBACK",
+      "createdAt": "2026-01-02T09:15:00Z", 
+      "descricao": "Achei a aula rapida demais",
+      "nota": "6",
+      "urgency": "baixa"
+    }
+  ]
+}
