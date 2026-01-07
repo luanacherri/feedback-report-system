@@ -78,6 +78,24 @@ Resources:
         - S3WritePolicy:
             BucketName: !Ref FeedbackReportsBucket
 
+  # Lambda Function para notificar (enviar relatório por e-mail)
+  NotifyReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-notify-report'
+      CodeUri: .
+      Handler: com.example.lambda.NotifyReportHandler::handleRequest
+      Environment:
+        Variables:
+          REPORTS_BUCKET: !Ref FeedbackReportsBucket
+          RECIPIENT_EMAIL: "luanacherri@gmail.com"
+          SOURCE_EMAIL: "luanacherri@gmail.com"
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref FeedbackReportsBucket
+        - SESCrudPolicy:
+            IdentityName: "luanacherri@gmail.com"
+
   # Step Functions State Machine for Processing Feedbacks
   FeedbackProcessingStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -114,6 +132,15 @@ Resources:
               "Resource": "${GenerateWeeklyReportFunction.Arn}",
               "Parameters": {
                 "feedbacks.$": "$.listResult.items"
+              },
+              "ResultPath": "$.reportResult",
+              "Next": "NotifyReport"
+            },
+            "NotifyReport": {
+              "Type": "Task",
+              "Resource": "${NotifyReportFunction.Arn}",
+              "Parameters": {
+                "reportKey.$": "$.reportResult"
               },
               "End": true
             },
@@ -167,6 +194,7 @@ Resources:
                 Resource:
                   - !GetAtt ListFeedbacksFunction.Arn
                   - !GetAtt GenerateWeeklyReportFunction.Arn
+                  - !GetAtt NotifyReportFunction.Arn
 
   # IAM Role for EventBridge
   EventBridgeRole:

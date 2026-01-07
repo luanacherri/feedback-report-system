@@ -8,7 +8,6 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
-import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -30,20 +29,26 @@ public class GenerateWeeklyReportHandler implements RequestHandler<Map<String, O
 
     public GenerateWeeklyReportHandler() {
         String s3Endpoint = System.getenv("S3_ENDPOINT");
+        String accessKey = System.getenv("AWS_ACCESS_KEY_ID");
+        String secretKey = System.getenv("AWS_SECRET_ACCESS_KEY");
+        
         S3ClientBuilder builder = S3Client.builder();
         
         if (s3Endpoint != null && !s3Endpoint.isEmpty()) {
+            // MinIO ou S3 local
             builder.endpointOverride(URI.create(s3Endpoint))
-                   .forcePathStyle(true); // Necessário para MinIO
+                   .forcePathStyle(true)
+                   .region(Region.US_EAST_1);
             
-            // Para ambiente local (MinIO), usar credenciais específicas
-            String accessKey = System.getenv("AWS_ACCESS_KEY_ID");
-            String secretKey = System.getenv("AWS_SECRET_ACCESS_KEY");
             if (accessKey != null && secretKey != null) {
                 AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
-                builder.credentialsProvider(StaticCredentialsProvider.create(credentials))
-                       .region(Region.US_EAST_1); // Região fixa para MinIO
+                builder.credentialsProvider(StaticCredentialsProvider.create(credentials));
             }
+        } else {
+            // AWS S3 em produção - usar credenciais padrão
+            String regionEnv = System.getenv("AWS_REGION");
+            Region region = regionEnv != null ? Region.of(regionEnv) : Region.US_EAST_1;
+            builder.region(region);
         }
         
         this.s3 = builder.build();
@@ -98,7 +103,8 @@ public class GenerateWeeklyReportHandler implements RequestHandler<Map<String, O
 
             logger.log("Relatório salvo no bucket S3: " + bucketName + "/" + objectKey + "\n");
 
-            return "Relatório gerado com sucesso: " + objectKey;
+            // Retornar apenas o objectKey para permitir encadeamento na Step Function
+            return objectKey;
 
         } catch (Exception e) {
             logger.log("Erro ao gerar relatório: " + e.getMessage());

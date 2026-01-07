@@ -1,0 +1,28 @@
+{
+  "startDate": "2025-12-29T00:00:00Z",
+  "endDate": "2026-01-04T23:59:59Z",
+  "count": 3,
+  "feedbacks": [
+    {
+      "createdAt": "2025-12-30T10:00:00Z",
+      "urgency": "alta",
+      "pk": "FEEDBACK",
+      "nota": "9",
+      "descricao": "Aula sobre serverless foi otima"
+    },
+    {
+      "createdAt": "2025-12-31T14:30:00Z",
+      "urgency": "media",
+      "pk": "FEEDBACK",
+      "nota": "8",
+      "descricao": "Gostei da explicacao de cloud"
+    },
+    {
+      "createdAt": "2026-01-02T09:15:00Z",
+      "urgency": "baixa",
+      "pk": "FEEDBACK",
+      "nota": "6",
+      "descricao": "Achei a aula rapida demais"
+    }
+  ]
+}

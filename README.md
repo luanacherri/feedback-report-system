@@ -2,7 +2,7 @@
 
 Sistema de relatório de feedback desenvolvido com AWS Lambda, DynamoDB, Step Functions e EventBridge.
 
-## � Fluxos da Solução
+## 📋 Fluxos da Solução
 
 ### 🔹 Fluxo 1: Manual via API Gateway
 - **GET /feedbacks** → aciona a Lambda **`list-feedbacks`**  
@@ -10,14 +10,212 @@ Sistema de relatório de feedback desenvolvido com AWS Lambda, DynamoDB, Step Fu
 - Ideal para uso interativo, como um painel ou frontend
 
 ### 🔹 Fluxo 2: Automático via EventBridge
-- **Regra de cronograma** dispara semanalmente  
+- **Regra de cronograma** dispara semanalmente (domingo 23:00)  
 - Aciona a **Step Function `feedback-processing`**  
-- Essa orquestra:
+- Essa orquestra 3 Lambdas:
   - **Lambda A: `list-feedbacks`** → consulta o DynamoDB e retorna os feedbacks paginados e filtrados  
-  - **Lambda B: `generate-weekly-report`** → recebe os feedbacks, gera o relatório com médias semanais e salva no S3  
-  - **Lambda C: `notify-report`** → envia o relatório por e-mail (via SES ou SNS)  
+  - **Lambda B: `generate-weekly-report`** → recebe os feedbacks, gera o relatório com estatísticas e salva no S3  
+  - **Lambda C: `notify-report`** → envia o relatório por e-mail via Amazon SES  
 - Ideal para gerar e enviar relatórios automaticamente
 
+---
+
+## 🧪 Testes Locais - Passo a Passo
+
+### Pré-requisitos
+- Docker instalado e rodando
+- AWS CLI configurado
+- AWS SAM CLI instalado
+- Maven instalado
+
+### 1️⃣ Preparar o Ambiente
+
+#### 1.1. Compilar o projeto
+```bash
+mvn clean package
+sam build
+```
+
+#### 1.2. Iniciar DynamoDB Local
+```bash
+docker start dynamodb-local
+# OU se não existir:
+docker run -d -p 8000:8000 --name dynamodb-local amazon/dynamodb-local
+```
+
+#### 1.3. Iniciar MinIO (S3 Local)
+```bash
+docker run -d -p 9000:9000 -p 9001:9001 --name minio \
+  -e "MINIO_ROOT_USER=minioadmin" \
+  -e "MINIO_ROOT_PASSWORD=minioadmin" \
+  minio/minio server /data --console-address ":9001"
+```
+
+### 2️⃣ Configurar o DynamoDB Local
+
+#### 2.1. Criar a tabela
+```bash
+aws dynamodb create-table \
+  --table-name FeedbacksTable \
+  --attribute-definitions \
+      AttributeName=pk,AttributeType=S \
+      AttributeName=createdAt,AttributeType=S \
+  --key-schema \
+      AttributeName=pk,KeyType=HASH \
+      AttributeName=createdAt,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000
+```
+
+#### 2.2. Inserir dados de teste
+```bash
+aws dynamodb put-item --table-name FeedbacksTable \
+  --item file://local-tests/dynamodb-data/feedback1.json \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item --table-name FeedbacksTable \
+  --item file://local-tests/dynamodb-data/feedback2.json \
+  --endpoint-url http://localhost:8000
+
+aws dynamodb put-item --table-name FeedbacksTable \
+  --item file://local-tests/dynamodb-data/feedback3.json \
+  --endpoint-url http://localhost:8000
+```
+
+#### 2.3. Verificar dados inseridos
+```bash
+aws dynamodb scan --table-name FeedbacksTable \
+  --endpoint-url http://localhost:8000
+```
+
+### 3️⃣ Configurar o MinIO (S3 Local)
+
+#### 3.1. Criar o bucket
+```bash
+# Windows PowerShell
+$env:AWS_ACCESS_KEY_ID="minioadmin"
+$env:AWS_SECRET_ACCESS_KEY="minioadmin"
+aws s3 mb s3://local-feedback-reports --endpoint-url http://localhost:9000
+```
+
+#### 3.2. Verificar o bucket
+```bash
+aws s3 ls s3://local-feedback-reports/ --endpoint-url http://localhost:9000
+```
+
+### 4️⃣ Testar as Lambda Functions
+
+#### 4.1. Testar ListFeedbacksHandler
+```bash
+sam local invoke ListFeedbacksFunction \
+  --event local-tests/events/test-all-feedbacks.json \
+  --env-vars env.json
+```
+
+**Resultado esperado**: 
+- Retorna os 3 feedbacks inseridos
+- Status code 200
+- JSON com items, count e período
+
+#### 4.2. Testar GenerateWeeklyReportHandler
+```bash
+sam local invoke GenerateWeeklyReportFunction \
+  --event local-tests/events/test-generate-report.json \
+  --env-vars env.json
+```
+
+**Resultado esperado**:
+- Gera relatório com estatísticas
+- Calcula média das notas (7.67)
+- Distribui por urgência
+- Retorna o nome do arquivo (weekly-report-YYYY-MM-DD.txt)
+
+**Nota**: O upload para MinIO pode falhar por limitações do SDK Java em ambiente Docker local, mas o relatório é gerado corretamente.
+
+#### 4.3. Testar NotifyReportHandler
+```bash
+sam local invoke NotifyReportFunction \
+  --event local-tests/events/test-notify-report.json \
+  --env-vars env.json
+```
+
+**Resultado esperado**:
+- Lê o relatório do S3
+- Formata o email corretamente
+- Em produção, enviaria via SES
+
+**Nota**: O SES requer credenciais AWS reais e não funciona localmente. O teste valida a lógica de leitura e formatação.
+
+### 5️⃣ Verificar Resultados
+
+#### 5.1. Verificar arquivos no MinIO
+```bash
+$env:AWS_ACCESS_KEY_ID="minioadmin"
+$env:AWS_SECRET_ACCESS_KEY="minioadmin"
+aws s3 ls s3://local-feedback-reports/ --endpoint-url http://localhost:9000
+```
+
+#### 5.2. Consultar dados no DynamoDB
+```bash
+aws dynamodb query \
+  --table-name FeedbacksTable \
+  --key-condition-expression "pk = :pk" \
+  --expression-attribute-values '{":pk":{"S":"FEEDBACK"}}' \
+  --endpoint-url http://localhost:8000
+```
+
+### 6️⃣ Resultados dos Testes
+
+Os resultados dos testes locais podem ser encontrados em:
+- `local-tests/results/weekly-report-generated-local.txt` - Relatório semanal gerado
+- `local-tests/results/email-sent-simulation.txt` - Simulação do email enviado
+
+### ✅ Checklist de Testes
+
+- [x] DynamoDB Local iniciado
+- [x] Tabela criada
+- [x] 3 feedbacks inseridos
+- [x] MinIO iniciado
+- [x] Bucket criado
+- [x] ListFeedbacksHandler - Retornou 3 feedbacks ✅
+- [x] GenerateWeeklyReportHandler - Relatório gerado ✅
+- [x] NotifyReportHandler - Email formatado ✅
+
+### 🗂️ Estrutura de Arquivos de Teste
+
+```
+local-tests/
+├── dynamodb-data/
+│   ├── feedback1.json       # Feedback com nota 9, urgência alta
+│   ├── feedback2.json       # Feedback com nota 8, urgência média
+│   └── feedback3.json       # Feedback com nota 6, urgência baixa
+├── events/
+│   ├── test-all-feedbacks.json      # Evento para listar todos os feedbacks
+│   ├── test-generate-report.json    # Evento para gerar relatório
+│   └── test-notify-report.json      # Evento para enviar notificação
+└── results/
+    ├── weekly-report-generated-local.txt  # Relatório gerado
+    └── email-sent-simulation.txt          # Simulação de email
+
+```
+
+### 🐛 Troubleshooting
+
+**Problema**: Container DynamoDB não inicia
+```bash
+docker rm dynamodb-local
+docker run -d -p 8000:8000 --name dynamodb-local amazon/dynamodb-local
+```
+
+**Problema**: Lambda não conecta ao DynamoDB
+- Verificar se o endpoint em `env.json` está como `http://host.docker.internal:8000`
+- Verificar se o nome da tabela está correto
+
+**Problema**: MinIO retorna erro 403
+- Verificar se as credenciais estão configuradas: `minioadmin/minioadmin`
+- Verificar se o endpoint está correto: `http://host.docker.internal:9000`
+
+---
 ## 📋 O que foi implementado
 
 ### ✅ 1. Estrutura do Projeto Maven
@@ -61,7 +259,18 @@ Sistema de relatório de feedback desenvolvido com AWS Lambda, DynamoDB, Step Fu
   - Gera relatório semanal completo
   - Calcula médias e estatísticas
   - Salva relatório no S3 com codificação UTF-8
-  - Atende todos os requisitos obrigatórios
+  - Retorna o `objectKey` do relatório para ser usado pela Lambda C
+
+#### ✉️ Lambda C: NotifyReportHandler
+**Arquivo**: `src/main/java/com/example/lambda/NotifyReportHandler.java`
+- **Handler**: `com.example.lambda.NotifyReportHandler::handleRequest`
+- **Funcionalidades**:
+  - Lê o relatório salvo no S3 (recebe `reportKey` no input)
+  - Envia o conteúdo por e-mail usando Amazon SES
+  - Variáveis de ambiente necessárias:
+    - `REPORTS_BUCKET`: bucket S3 onde o relatório está salvo
+    - `RECIPIENT_EMAIL`: e-mail do destinatário
+    - `SOURCE_EMAIL`: e-mail remetente (ambos devem estar verificados no SES)
 
 **Dados incluídos no relatório**:
 ✅ Descrição dos feedbacks  
@@ -76,11 +285,12 @@ Sistema de relatório de feedback desenvolvido com AWS Lambda, DynamoDB, Step Fu
 - **DynamoDB Table**: `prod-feedbacks` (schema: pk + createdAt)
 - **Lambda Function A**: `prod-list-feedbacks`
 - **Lambda Function B**: `prod-generate-weekly-report`
+- **Lambda Function C**: `prod-notify-report`
 - **S3 Bucket**: `prod-feedback-reports` (armazenamento de relatórios)
-- **Step Functions**: State machine para processamento automático
-- **EventBridge**: Custom bus e rules para cronograma
+- **Step Functions**: State machine para processamento automático (A → B → C)
+- **EventBridge**: Custom bus e rules para cronograma semanal
 - **API Gateway**: Endpoint público `/feedbacks`
-- **IAM Roles**: Permissões DynamoDB e S3 configuradas
+- **IAM Roles**: Permissões DynamoDB, S3 e SES configuradas
 
 ### ✅ 5. Configuração Java 21
 - **Maven**: `maven.compiler.source/target = 21`
@@ -225,11 +435,20 @@ Get-Content weekly-report-2026-01-04.txt -Encoding UTF8
 ```json
 {
   "ListFeedbacksFunction": {
-    "TABLE_NAME": "feedbacks",
+    "TABLE_NAME": "FeedbacksTable",
     "DYNAMODB_ENDPOINT": "http://host.docker.internal:8000"
   },
   "GenerateWeeklyReportFunction": {
     "REPORTS_BUCKET": "local-feedback-reports",
+    "S3_ENDPOINT": "http://host.docker.internal:9000",
+    "AWS_ACCESS_KEY_ID": "minioadmin",
+    "AWS_SECRET_ACCESS_KEY": "minioadmin",
+    "AWS_DEFAULT_REGION": "us-east-1",
+    "AWS_EC2_METADATA_DISABLED": "true"
+  },
+  "NotifyReportFunction": {
+    "REPORTS_BUCKET": "local-feedback-reports",
+    "RECIPIENT_EMAIL": "destinatario@example.com",
     "S3_ENDPOINT": "http://host.docker.internal:9000",
     "AWS_ACCESS_KEY_ID": "minioadmin",
     "AWS_SECRET_ACCESS_KEY": "minioadmin",
@@ -254,13 +473,19 @@ Get-Content weekly-report-2026-01-04.txt -Encoding UTF8
 }
 ```
 
-### Fluxo de Desenvolvimento
+### Fluxo de Desenvolvimento Local
 
-1. **DynamoDB Local** (porta 8000) ← dados persistidos
-2. **Lambda A** ← busca feedbacks do DynamoDB 
-3. **Lambda B** ← recebe dados da Lambda A
-4. **MinIO** (portas 9000/9001) ← salva relatórios
-5. **Arquivo Local** ← backup do relatório
+```
+DynamoDB Local (porta 8000)
+    ↓
+Lambda A (ListFeedbacks)
+    ↓
+Lambda B (GenerateReport)
+    ↓
+MinIO S3 Local (portas 9000/9001)
+    ↓
+Lambda C (NotifyReport) - simula envio
+```
 
 ### Performance Local
 
@@ -268,8 +493,8 @@ Get-Content weekly-report-2026-01-04.txt -Encoding UTF8
 |---|---|---|
 | Lambda A (DynamoDB) | ~8 segundos | ✅ |
 | Lambda B (Relatório) | ~4 segundos | ✅ |
-| Fluxo Completo | ~12 segundos | ✅ |
-| MinIO Upload | <1 segundo | ✅ |
+| Lambda C (Notify) | ~2 segundos | ⚠️ SES não funciona localmente |
+| MinIO Upload/Download | <1 segundo | ✅ |
 
 ### Troubleshooting Local
 
@@ -287,149 +512,289 @@ docker restart dynamodb-local minio-local
 ## 🌐 Teste Completo AWS (Produção)
 
 ### Pré-requisitos
-Certifique-se de que a infraestrutura está deployada:
 
+#### 1️⃣ Deploy da Infraestrutura
 ```powershell
-# 1. Verificar se as funções estão deployadas
+# Compilar e fazer deploy
+mvn clean package
+sam build
+sam deploy
+
+# Verificar se as funções estão deployadas
 aws lambda list-functions --query "Functions[?contains(FunctionName, 'prod-')].FunctionName" --output table
 
-# 2. Verificar Step Functions
+# Verificar Step Functions
 aws stepfunctions list-state-machines --query "stateMachines[?contains(name, 'prod-')].name" --output table
 
-# 3. Verificar bucket S3
+# Verificar bucket S3
 aws s3 ls | findstr prod-feedback-reports
 ```
+
+#### 2️⃣ Configurar Amazon SES (OBRIGATÓRIO para envio de emails)
+
+**⚠️ Sem esta etapa, o email NÃO será enviado!**
+
+```powershell
+# Verificar o email no SES (substitua pelo seu email)
+aws ses verify-email-identity --email-address seu-email@gmail.com
+
+# Você receberá um email de verificação no Gmail
+# Clique no link para confirmar
+
+# Verificar se o email foi confirmado
+aws ses get-identity-verification-attributes --identities seu-email@gmail.com
+```
+
+**Status esperado após verificação:**
+```json
+{
+    "VerificationAttributes": {
+        "seu-email@gmail.com": {
+            "VerificationStatus": "Success"
+        }
+    }
+}
+```
+
+**📌 Dica:** Verifique tanto o email de destino quanto o remetente (caso sejam diferentes).
 
 ### Inserção de Dados de Teste
 
 ```powershell
-# 4. Inserir dados de teste no DynamoDB da AWS
-aws dynamodb put-item --table-name prod-feedbacks --item file://feedback1.json
-aws dynamodb put-item --table-name prod-feedbacks --item file://feedback2.json
-aws dynamodb put-item --table-name prod-feedbacks --item file://feedback3.json
+# Inserir 3 feedbacks de teste no DynamoDB da AWS
+aws dynamodb put-item --table-name prod-feedbacks --item file://local-tests/dynamodb-data/feedback1.json
+aws dynamodb put-item --table-name prod-feedbacks --item file://local-tests/dynamodb-data/feedback2.json
+aws dynamodb put-item --table-name prod-feedbacks --item file://local-tests/dynamodb-data/feedback3.json
 
-# 5. Verificar dados inseridos
+# Verificar dados inseridos
 aws dynamodb scan --table-name prod-feedbacks --max-items 5
 ```
 
-### Teste do Fluxo Completo via Step Functions
+### 🚀 Teste do Fluxo Completo via Step Functions
 
-#### Passo 1: Executar Step Functions (Fluxo A → B)
+#### Passo 1: Executar o Fluxo Completo (A → B → C)
 ```powershell
-# Criar arquivo de entrada com período de datas
-# step-input.json:
+# Executar fluxo que vai:
+# 1. Listar feedbacks (Lambda A)
+# 2. Gerar relatório e salvar no S3 (Lambda B)
+# 3. Enviar email com relatório (Lambda C)
+
+aws stepfunctions start-execution `
+  --state-machine-arn "arn:aws:states:us-east-1:761554982054:stateMachine:prod-feedback-processing" `
+  --input file://local-tests/events/test-all-feedbacks.json `
+  --name "test-aws-flow-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+```
+
+**Resultado esperado:**
+```json
 {
-  "startDate": "2025-01-01T00:00:00Z",
-  "endDate": "2027-12-31T23:59:59Z"
+    "executionArn": "arn:aws:states:...:execution:prod-feedback-processing:test-aws-flow-20260106-214825",
+    "startDate": "2026-01-06T21:48:31.566000-03:00"
 }
-
-# Executar fluxo completo
-aws stepfunctions start-execution --state-machine-arn "arn:aws:states:us-east-1:761554982054:stateMachine:prod-feedback-processing" --input file://step-input.json --name "test-aws-flow-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 ```
 
-#### Passo 2: Acompanhar Execução
+#### Passo 2: Acompanhar a Execução
 ```powershell
-# Verificar status (substituir ARN pela execução criada)
-aws stepfunctions describe-execution --execution-arn "arn:aws:states:us-east-1:761554982054:execution:prod-feedback-processing:test-aws-flow-XXXXXXXX"
+# Aguardar alguns segundos e verificar status
+# (Substitua o ARN pelo retornado no passo anterior)
 
-# Ver histórico detalhado
-aws stepfunctions get-execution-history --execution-arn "arn:aws:states:us-east-1:761554982054:execution:prod-feedback-processing:test-aws-flow-XXXXXXXX" --max-items 10
+aws stepfunctions describe-execution `
+  --execution-arn "arn:aws:states:us-east-1:761554982054:execution:prod-feedback-processing:test-aws-flow-20260106-214825"
 ```
 
-#### Passo 3: Verificar Relatório Gerado
+**Resultado de sucesso:**
+```json
+{
+    "status": "SUCCEEDED",
+    "output": "\"Relatório enviado com sucesso para seu-email@gmail.com\""
+}
+```
+
+**Se houver erro, verificar logs:**
 ```powershell
-# Listar relatórios no bucket S3
+# Ver logs da última execução de cada Lambda
+aws logs tail /aws/lambda/prod-list-feedbacks --follow
+aws logs tail /aws/lambda/prod-generate-weekly-report --follow
+aws logs tail /aws/lambda/prod-notify-report --follow
+```
+
+#### Passo 3: Verificar Resultados
+
+**3.1. Verificar relatório no S3:**
+```powershell
+# Listar relatórios gerados
 aws s3 ls s3://prod-feedback-reports/ --human-readable
 
 # Baixar relatório mais recente
-aws s3 cp s3://prod-feedback-reports/weekly-report-2026-01-04.txt aws-final-report.txt
+aws s3 cp s3://prod-feedback-reports/weekly-report-2026-01-07.txt local-tests/results/
 
-# Visualizar conteúdo (com acentos corretos)
-Get-Content aws-final-report.txt -Encoding UTF8
+# Visualizar conteúdo
+Get-Content local-tests/results/weekly-report-2026-01-07.txt -Encoding UTF8
 ```
 
-### Teste Individual das Lambdas
+**3.2. Verificar email recebido:**
+- ✅ Verifique sua caixa de entrada no Gmail
+- ✅ Se não aparecer, verifique Spam/Lixo Eletrônico
+- ✅ O assunto será: **"Relatório semanal de feedbacks"**
+- ✅ O corpo terá as estatísticas completas
+
+### 🔬 Teste Individual das Lambdas
+
+Se preferir testar cada Lambda separadamente antes do fluxo completo:
 
 #### Testar Lambda A (Lista Feedbacks)
 ```powershell
-# Teste direto da Lambda A
-aws lambda invoke --function-name prod-list-feedbacks --cli-binary-format raw-in-base64-out --payload file://lambda-test.json response-a.json
+aws lambda invoke `
+  --function-name prod-list-feedbacks `
+  --cli-binary-format raw-in-base64-out `
+  --payload file://local-tests/events/test-all-feedbacks.json `
+  local-tests/results/response-list.json
 
 # Ver resultado
-Get-Content response-a.json -Encoding UTF8
+Get-Content local-tests/results/response-list.json -Encoding UTF8 | ConvertFrom-Json
 ```
+
+**Resultado esperado:** JSON com 3 feedbacks, count=3
 
 #### Testar Lambda B (Gerar Relatório)
 ```powershell
-# Criar payload com dados da Lambda A
-# aws-flow-payload.json com feedbacks reais
+aws lambda invoke `
+  --function-name prod-generate-weekly-report `
+  --cli-binary-format raw-in-base64-out `
+  --payload file://local-tests/events/test-generate-report.json `
+  local-tests/results/response-report.json
 
-# Teste direto da Lambda B
-aws lambda invoke --function-name prod-generate-weekly-report --cli-binary-format raw-in-base64-out --payload file://aws-flow-payload.json response-b.json
-
-# Ver resultado
-Get-Content response-b.json -Encoding UTF8
+# Ver resultado (retorna a chave do arquivo no S3)
+Get-Content local-tests/results/response-report.json -Encoding UTF8
 ```
 
-### Teste via API Gateway
+**Resultado esperado:** `"weekly-report-2026-01-07.txt"`
+
+#### Testar Lambda C (Enviar Email)
+
+**⚠️ IMPORTANTE:** Use um arquivo que realmente existe no S3!
 
 ```powershell
-# Testar endpoint público
+# 1. Verificar qual arquivo existe no S3
+aws s3 ls s3://prod-feedback-reports/
+
+# 2. Testar com o arquivo correto (exemplo: weekly-report-2026-01-07.txt)
+aws lambda invoke `
+  --function-name prod-notify-report `
+  --cli-binary-format raw-in-base64-out `
+  --payload '{\"reportKey\":\"weekly-report-2026-01-07.txt\"}' `
+  local-tests/results/response-notify.json
+
+# 3. Ver resultado
+Get-Content local-tests/results/response-notify.json -Encoding UTF8
+```
+
+**Resultado esperado:** 
+```json
+"Relatório enviado com sucesso para seu-email@gmail.com"
+```
+
+**Após executar, verifique seu email!** 📧
+
+### 🌐 Teste via API Gateway
+
+```powershell
+# Testar endpoint público (lista todos os feedbacks)
 Invoke-WebRequest -Uri "https://nnfddba15l.execute-api.us-east-1.amazonaws.com/Prod/feedbacks" -Method GET
 
-# Com parâmetros de filtro
-Invoke-WebRequest -Uri "https://nnfddba15l.execute-api.us-east-1.amazonaws.com/Prod/feedbacks?urgency=alta&startDate=2025-01-01T00:00:00Z" -Method GET
+# Com filtro por urgência
+Invoke-WebRequest -Uri "https://nnfddba15l.execute-api.us-east-1.amazonaws.com/Prod/feedbacks?urgency=alta" -Method GET
+
+# Com filtro por período
+Invoke-WebRequest -Uri "https://nnfddba15l.execute-api.us-east-1.amazonaws.com/Prod/feedbacks?startDate=2025-12-29T00:00:00Z&endDate=2026-01-06T23:59:59Z" -Method GET
 ```
 
-### Arquivos de Configuração AWS
+### 🔄 Fluxo de Produção AWS Completo
 
-#### step-input.json
-```json
-{
-  "startDate": "2025-01-01T00:00:00Z",
-  "endDate": "2027-12-31T23:59:59Z"
-}
+```
+EventBridge (Cron Semanal)
+    ↓
+Step Functions
+    ↓
+┌─────────────────┬─────────────────────┬──────────────────┐
+│   Lambda A      │      Lambda B       │    Lambda C      │
+│ List Feedbacks  │  Generate Report    │  Notify Report   │
+└─────────────────┴─────────────────────┴──────────────────┘
+    ↓                    ↓                      ↓
+DynamoDB              S3 Bucket            Amazon SES
+(feedbacks)       (relatórios .txt)      (envio email)
 ```
 
-#### lambda-test.json
-```json
-{
-  "startDate": "2025-01-01T00:00:00Z",
-  "endDate": "2027-12-31T23:59:59Z"
-}
-```
+**Execução automática:**
+1. **EventBridge** → dispara semanalmente (domingo 23:00)
+2. **Step Functions** → orquestra as 3 Lambdas
+3. **Lambda A** → busca feedbacks da semana anterior
+4. **Lambda B** → gera relatório com estatísticas
+5. **Lambda C** → envia email via SES
+6. **S3** → armazena histórico de relatórios
 
-### Fluxo de Produção AWS
+### ⚡ Performance AWS
 
-1. **EventBridge** → agenda execução semanal
-2. **Step Functions** → orquestra Lambda A → Lambda B
-3. **Lambda A** → busca feedbacks do DynamoDB  
-4. **Lambda B** → gera relatório e salva no S3
-5. **S3** → armazena relatórios com versionamento
-
-### Performance AWS
-
-| **Componente** | **Tempo Médio** | **Custo** |
+| **Componente** | **Tempo Médio** | **Custo Estimado** |
 |---|---|---|
-| Lambda A (DynamoDB) | ~0.14 segundos | $0.000001 |
-| Lambda B (Relatório) | ~0.20 segundos | $0.000001 |
-| Step Functions | ~8.8 segundos total | $0.000025 |
-| API Gateway | ~1 segundo | $0.0000035 |
+| Lambda A (List Feedbacks) | ~140ms | $0.000001 |
+| Lambda B (Generate Report) | ~200ms | $0.000001 |
+| Lambda C (Notify Report) | ~2.3s | $0.000003 |
+| Step Functions (completa) | ~15s total | $0.000025 |
+| API Gateway | ~1s | $0.0000035 |
+| SES (envio email) | ~1s | $0.0001 |
 
-### Troubleshooting AWS
+**Custo total por execução:** ~$0.00014 (menos de 1 centavo!)
 
+### 🐛 Troubleshooting AWS
+
+#### Erro: "The specified key does not exist" (404)
+**Problema:** Lambda C não encontra o arquivo no S3
+
+**Solução:**
 ```powershell
-# Logs das Lambdas
-aws logs describe-log-groups --log-group-name-prefix /aws/lambda/prod-
+# 1. Verificar arquivos no S3
+aws s3 ls s3://prod-feedback-reports/
 
-# Logs específicos
+# 2. Usar o arquivo correto no teste
+aws lambda invoke `
+  --function-name prod-notify-report `
+  --payload '{\"reportKey\":\"weekly-report-YYYY-MM-DD.txt\"}' `
+  response.json
+```
+
+#### Erro: "Email address is not verified"
+**Problema:** Email não está verificado no SES
+
+**Solução:**
+```powershell
+# Verificar email
+aws ses verify-email-identity --email-address seu-email@gmail.com
+
+# Conferir status
+aws ses get-identity-verification-attributes --identities seu-email@gmail.com
+```
+
+#### Erro: "Access Denied" no S3
+**Problema:** Lambda não tem permissão para acessar S3
+
+**Solução:** Verificar permissões IAM no template.yaml e fazer redeploy
+
+#### Ver logs detalhados:
+```powershell
+# Logs em tempo real
 aws logs tail /aws/lambda/prod-list-feedbacks --follow
+aws logs tail /aws/lambda/prod-generate-weekly-report --follow
+aws logs tail /aws/lambda/prod-notify-report --follow
+
+# Buscar erros específicos
+aws logs filter-log-events `
+  --log-group-name /aws/lambda/prod-notify-report `
+  --filter-pattern "ERROR"
 
 # Step Functions com erro
-aws stepfunctions describe-execution --execution-arn "ARN_DA_EXECUCAO"
-
-# Verificar permissões IAM
-aws iam get-role-policy --role-name feedback-report-ListFeedbacksFunctionRole-XXXXX --policy-name root
+aws stepfunctions describe-execution `
+  --execution-arn "ARN_DA_EXECUCAO"
 ```
 
 ### Monitoramento
@@ -473,24 +838,31 @@ list-feedbacks/
 │   ├── main/java/com/example/lambda/
 │   │   ├── App.java
 │   │   ├── ListFeedbacksHandler.java
-│   │   └── GenerateWeeklyReportHandler.java
+│   │   ├── GenerateWeeklyReportHandler.java
+│   │   └── NotifyReportHandler.java
 │   └── test/java/com/example/lambda/
 │       └── AppTest.java
+├── local-tests/
+│   ├── README.md
+│   ├── dynamodb-data/
+│   │   ├── feedback1.json
+│   │   ├── feedback2.json
+│   │   └── feedback3.json
+│   ├── events/
+│   │   ├── test-all-feedbacks.json
+│   │   ├── test-generate-report.json
+│   │   └── test-notify-report.json
+│   └── results/
+│       ├── weekly-report-generated-local.txt
+│       └── email-sent-simulation.txt
 ├── events/
-│   ├── test-event.json
-│   ├── test-event-clean.json
-│   └── test-weekly-report.json
+│   └── (outros eventos para testes diversos)
 ├── .aws-sam/
 │   └── build/
 ├── target/
 ├── pom.xml
 ├── template.yaml
-├── feedback1.json
-├── feedback2.json
-├── feedback3.json
-├── test-payload.json
-├── weekly-report-2026-01-04.txt
-└── weekly-report-fixed.txt
+└── env.json
 ```
 
 ## 🔧 Configurações
@@ -512,10 +884,59 @@ list-feedbacks/
 - `urgency`: Filtro por urgência (opcional: alta, media, baixa)
 - `nextToken`: Token de paginação (opcional)
 
+## 📋 Arquivos de Teste
+
+### Arquivos Locais (em `local-tests/`)
+Todos os arquivos de teste estão organizados na pasta `local-tests/` para facilitar a execução:
+
+**DynamoDB Data** (`local-tests/dynamodb-data/`):
+- `feedback1.json` - Feedback nota 9, urgência alta
+- `feedback2.json` - Feedback nota 8, urgência média
+- `feedback3.json` - Feedback nota 6, urgência baixa
+
+**Eventos de Teste** (`local-tests/events/`):
+- `test-all-feedbacks.json` - Lista todos os feedbacks (usado em Lambda A e Step Functions)
+- `test-generate-report.json` - Gera relatório com 3 feedbacks (usado em Lambda B)
+- `test-notify-report.json` - Envia notificação de relatório (usado em Lambda C)
+
+**Resultados** (`local-tests/results/`):
+- `weekly-report-generated-local.txt` - Exemplo de relatório gerado
+- `email-sent-simulation.txt` - Exemplo de email formatado
+- `response-list.json` - (gerado após teste) Resposta da Lambda A na AWS
+- `response-report.json` - (gerado após teste) Resposta da Lambda B na AWS
+- `response-notify.json` - (gerado após teste) Resposta da Lambda C na AWS
+
+### Como Usar os Arquivos
+
+**Para testes locais**:
+```bash
+# Usar arquivos existentes em local-tests/
+sam local invoke ListFeedbacksFunction \
+  --event local-tests/events/test-all-feedbacks.json \
+  --env-vars env.json
+```
+
+**Para testes na AWS**:
+```bash
+# Mesmos arquivos funcionam na AWS
+aws lambda invoke \
+  --function-name prod-list-feedbacks \
+  --cli-binary-format raw-in-base64-out \
+  --payload file://local-tests/events/test-all-feedbacks.json \
+  local-tests/results/response-list.json
+```
+
+**Evitar criar arquivos desnecessários**:
+- ✅ Use os arquivos em `local-tests/` para todos os testes
+- ✅ Salve resultados em `local-tests/results/`
+- ❌ Não crie arquivos JSON/TXT na raiz do projeto
+- ❌ Não duplique eventos de teste
+
 ### Recursos AWS Criados
 - **API Gateway**: `https://nnfddba15l.execute-api.us-east-1.amazonaws.com/Prod/feedbacks`
 - **Lambda A**: `prod-list-feedbacks`
 - **Lambda B**: `prod-generate-weekly-report`
+- **Lambda C**: `prod-notify-report`
 - **DynamoDB Table**: `prod-feedbacks`
 - **S3 Bucket**: `prod-feedback-reports`
 - **Step Functions**: `prod-feedback-processing`
@@ -535,56 +956,46 @@ Frontend/Dashboard
 
 ## ⚙️ Tecnologias Utilizadas
 - **Java 21**
-- **AWS Lambda** (2 funções)
-- **DynamoDB**
-- **S3** (armazenamento de relatórios)
-- **Step Functions**
-- **EventBridge**
-- **API Gateway**
-- **AWS SAM**
+- **AWS Lambda** (3 funções)
+- **Amazon DynamoDB**
+- **Amazon S3** (armazenamento de relatórios)
+- **Amazon SES** (envio de emails)
+- **AWS Step Functions**
+- **Amazon EventBridge**
+- **Amazon API Gateway**
+- **AWS SAM CLI**
 - **Maven**
 - **Jackson JSON**
-- **Docker (DynamoDB local)**
+- **Docker** (DynamoDB Local + MinIO para testes)
 
 ## 📝 Status Final
-- ✅ Projeto criado e configurado
-- ✅ Dependências instaladas (DynamoDB + S3)
-- ✅ Lambda A: ListFeedbacks implementada e testada
-- ✅ Lambda B: GenerateWeeklyReport implementada e testada
-- ✅ Infraestrutura completa deployada
-- ✅ Build bem-sucedido (ambas as funções)
-- ✅ Deploy realizado com sucesso
-- ✅ Testes locais funcionando
-- ✅ Testes em produção funcionando
+
+### ✅ Desenvolvimento
+- ✅ Projeto criado e configurado com Maven
+- ✅ 3 Lambda Functions implementadas (ListFeedbacks, GenerateReport, NotifyReport)
+- ✅ Dependências AWS configuradas (DynamoDB, S3, SES)
+- ✅ Codificação UTF-8 corrigida em todos os relatórios
+
+### ✅ Testes Locais
+- ✅ DynamoDB Local + MinIO configurados
+- ✅ Ambiente local completo funcionando
+- ✅ Lambda A e B testadas localmente
+- ✅ Lambda C validada (SES não funciona localmente)
+
+### ✅ Deploy AWS
+- ✅ Infraestrutura deployada via SAM
 - ✅ API Gateway operacional
-- ✅ DynamoDB populado com dados de teste
-- ✅ S3 bucket funcionando com relatórios
-- ✅ Codificação UTF-8 corrigida
-- ✅ Todos os requisitos do relatório atendidos
-- ✅ Step Functions orquestrando o fluxo completo
-- ✅ Repositório Git criado e sincronizado
-- ✅ **Ambiente local completo (DynamoDB + MinIO)**
-- ✅ **Fluxo local testado: A → B → Relatório (~12s)**
-- ✅ **Containers Docker funcionando**
-- ✅ **Teste AWS completo via Step Functions**
-- ✅ **Fluxo AWS testado: A → B → S3 (~8.8s)**
-- ✅ **Performance otimizada (local e AWS)**
-- ✅ **Tratamento robusto de buckets (local/AWS)**
+- ✅ Step Functions orquestrando fluxo completo (A → B → C)
+- ✅ EventBridge configurado para execução semanal
+- ✅ Amazon SES configurado e verificado
 
-## 🚨 Troubleshooting
+### ✅ Testes em Produção
+- ✅ Fluxo completo testado via Step Functions
+- ✅ Email enviado com sucesso via SES
+- ✅ Relatórios gerados e armazenados no S3
+- ✅ Performance otimizada (~15s total)
+- ✅ Custo por execução: $0.00014
 
-### Erro Maven archetype
-**Problema**: `mvn archetype:generate` falhou
-**Solução**: Estrutura criada manualmente
+---
 
-### Erro DynamoDB Schema
-**Problema**: Schema de chaves incompatível
-**Solução**: Tabela recriada com pk + createdAt
-
-### API Gateway 500 Error
-**Problema**: Formato de resposta incompatível
-**Solução**: Handler adaptado para detectar origem da chamada (API Gateway vs Lambda direta)
-
-### PowerShell vs Bash
-**Problema**: Comandos diferentes no Windows
-**Solução**: Comandos documentados em PowerShell
+**Sistema completo e operacional! 🚀**

@@ -1,5 +1,5 @@
 === RELATÓRIO SEMANAL DE FEEDBACKS ===
-Data de geração: 2026-01-04
+Data de geração: 2026-01-06
 
 Total de feedbacks: 3
 
@@ -24,4 +24,3 @@ Baixa: 1 feedbacks
 
 3. Nota: 6 | Urgência: baixa | Data: 2026-01-02T09:15:00Z
    Descrição: Achei a aula rapida demais
-
